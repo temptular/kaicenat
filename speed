@@ -495,21 +495,35 @@ _G.AutoFishLoad = function()
 		AgentHeight = 5,
 		AgentCanJump = true,
 		AgentCanClimb = true,
-		WaypointSpacing = 4,
+		WaypointSpacing = 3,
 	}
 	local STUCK_DETECT_SEC, JUMP_BURST_SEC, PROGRESS_DIST = 3, 5, 1.2
+	local JUMP_UP_THRESHOLD, JUMP_STUCK_SEC = 1.2, 1.2
 	local function refreshWalkCharacter()
 		local char = LocalPlayer.Character
 		if not char then return nil, nil end
 		return char:FindFirstChildOfClass("Humanoid"), char:FindFirstChild("HumanoidRootPart")
+	end
+	local function targetNeedsJump(movePos, hrp)
+		if not hrp or not movePos then return false end
+		return (movePos.Y - hrp.Position.Y) > JUMP_UP_THRESHOLD
+	end
+	local function attemptJump(hum)
+		hum.Jump = true
+		pcall(function()
+			local state = hum:GetState()
+			if state ~= Enum.HumanoidStateType.Jumping and state ~= Enum.HumanoidStateType.Freefall then
+				hum:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end)
 	end
 	local function runJumpBurst(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt)
 		local burstEnd = tick() + JUMP_BURST_SEC
 		while tick() < burstEnd and tick() < segmentDeadline do
 			if aborted() then return false, lastProgressPos, lastProgressAt end
 			hum:MoveTo(movePos)
-			hum.Jump = true
-			task.wait(0.1)
+			attemptJump(hum)
+			task.wait(0.08)
 			hum, hrp = refreshWalkCharacter()
 			if not hum or not hrp then return false, lastProgressPos, lastProgressAt end
 			local moved = (hrp.Position - lastProgressPos).Magnitude
@@ -520,7 +534,7 @@ _G.AutoFishLoad = function()
 		end
 		return true, lastProgressPos, tick()
 	end
-	local function waitWhileMoving(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt, arrivedFn)
+	local function waitWhileMoving(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt, arrivedFn, wpAction)
 		while tick() < segmentDeadline do
 			hum, hrp = refreshWalkCharacter()
 			if not hum or not hrp then return false, lastProgressPos, lastProgressAt end
@@ -529,16 +543,24 @@ _G.AutoFishLoad = function()
 				return true, lastProgressPos, lastProgressAt
 			end
 			hum:MoveTo(movePos)
+			local goingUp = wpAction == Enum.PathWaypointAction.Jump or targetNeedsJump(movePos, hrp)
+			if goingUp then
+				attemptJump(hum)
+			end
 			local moved = (hrp.Position - lastProgressPos).Magnitude
 			if moved >= PROGRESS_DIST then
 				lastProgressPos = hrp.Position
 				lastProgressAt = tick()
-			elseif tick() - lastProgressAt >= STUCK_DETECT_SEC then
-				local ok
-				ok, lastProgressPos, lastProgressAt = runJumpBurst(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt)
-				if not ok then return false, lastProgressPos, lastProgressAt end
+			else
+				local stuckFor = tick() - lastProgressAt
+				local stuckLimit = goingUp and JUMP_STUCK_SEC or STUCK_DETECT_SEC
+				if stuckFor >= stuckLimit then
+					local ok
+					ok, lastProgressPos, lastProgressAt = runJumpBurst(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt)
+					if not ok then return false, lastProgressPos, lastProgressAt end
+				end
 			end
-			task.wait(0.12)
+			task.wait(goingUp and 0.08 or 0.12)
 		end
 		hum, hrp = refreshWalkCharacter()
 		if hum and hrp and arrivedFn and arrivedFn(hrp) then
@@ -601,7 +623,7 @@ _G.AutoFishLoad = function()
 				local ok
 				ok, lastProgressPos, lastProgressAt = waitWhileMoving(hum, hrp, targetPos, segEnd, aborted, lastProgressPos, lastProgressAt, function(root)
 					return nearPos(root.Position, targetPos)
-				end)
+				end, targetNeedsJump(targetPos, hrp) and Enum.PathWaypointAction.Jump or nil)
 				if ok == false then return false end
 				if ok and nearPos(hrp.Position, targetPos) then
 					hum:MoveTo(hrp.Position)
@@ -615,7 +637,7 @@ _G.AutoFishLoad = function()
 					local ok
 					ok, lastProgressPos, lastProgressAt = waitWhileMoving(hum, hrp, targetPos, segEnd, aborted, lastProgressPos, lastProgressAt, function(root)
 						return nearPos(root.Position, targetPos)
-					end)
+					end, targetNeedsJump(targetPos, hrp) and Enum.PathWaypointAction.Jump or nil)
 					if ok == false then return false end
 				else
 					for wpIndex = 2, #waypoints do
@@ -627,8 +649,10 @@ _G.AutoFishLoad = function()
 						end
 
 						local wp = waypoints[wpIndex]
-						if wp.Action == Enum.PathWaypointAction.Jump then
-							hum.Jump = true
+						local mustJump = wp.Action == Enum.PathWaypointAction.Jump
+							or targetNeedsJump(wp.Position, hrp)
+						if mustJump then
+							attemptJump(hum)
 						end
 						hum:MoveTo(wp.Position)
 
@@ -636,7 +660,7 @@ _G.AutoFishLoad = function()
 						local ok
 						ok, lastProgressPos, lastProgressAt = waitWhileMoving(hum, hrp, wp.Position, wpDeadline, aborted, lastProgressPos, lastProgressAt, function(root)
 							return nearPos(root.Position, wp.Position, 4, 10) or nearPos(root.Position, targetPos)
-						end)
+						end, wp.Action)
 						if ok == false then return false end
 						if nearPos(hrp.Position, targetPos) then
 							hum:MoveTo(hrp.Position)
