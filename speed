@@ -1,4 +1,4 @@
--- Auto Fish v8.5 — rejoin dock return fix
+-- Auto Fish v8.6 — RBD counter + auto rejoin on disconnect
 local AUTOFISH_CONFIG_DIR = "AutoFish"
 local AUTOFISH_STATE_FILE = AUTOFISH_CONFIG_DIR .. "/state.json"
 
@@ -86,6 +86,7 @@ _G.AutoFishPersistState = function(pendingReturn)
 		returnOnDeath = _G.AutoFishReturnOnDeath,
 		antiAfk = _G.AutoFishAntiAfk,
 		keepOnTeleport = _G.AutoFishKeepOnTeleport ~= false,
+		autoRejoin = _G.AutoFishAutoRejoin ~= false,
 		pendingReturn = pendingReturn == true,
 		scriptUrl = getAutoFishScriptUrl(),
 	}
@@ -109,6 +110,7 @@ local function loadAutoFishState()
 	if data.returnOnDeath ~= nil then _G.AutoFishReturnOnDeath = data.returnOnDeath end
 	if data.antiAfk ~= nil then _G.AutoFishAntiAfk = data.antiAfk end
 	if data.keepOnTeleport ~= nil then _G.AutoFishKeepOnTeleport = data.keepOnTeleport ~= false end
+	if data.autoRejoin ~= nil then _G.AutoFishAutoRejoin = data.autoRejoin ~= false end
 	if data.pendingReturn then _G.AutoFishPendingReturn = true end
 	if data.scriptUrl then
 		_G.AutoFishScriptUrl = data.scriptUrl
@@ -161,6 +163,25 @@ if not _G.AutoFishTeleportHooked then
 	end)
 end
 
+if not _G.AutoFishDisconnectHooked then
+	_G.AutoFishDisconnectHooked = true
+	local GuiService = game:GetService("GuiService")
+	local lastDisconnectRejoin = 0
+	GuiService.ErrorMessageChanged:Connect(function(message)
+		if _G.AutoFishAutoRejoin == false then return end
+		if not message or message == "" then return end
+		if _G.AutoFishRejoining then return end
+		local now = tick()
+		if now - lastDisconnectRejoin < 8 then return end
+		lastDisconnectRejoin = now
+		task.defer(function()
+			pcall(function()
+				_G.AutoFishRejoin(_G.AutoFishPendingReturn == true)
+			end)
+		end)
+	end)
+end
+
 _G.AutoFishCleanup = function()
 	if _G.AutoFishCharacterConnection then pcall(function() _G.AutoFishCharacterConnection:Disconnect() end) _G.AutoFishCharacterConnection = nil end
 	if _G.AutoFishAfkPulseConnection then pcall(function() _G.AutoFishAfkPulseConnection:Disconnect() end) _G.AutoFishAfkPulseConnection = nil end
@@ -197,6 +218,7 @@ _G.AutoFishLoad = function()
 	_G.AutoFishCleanup()
 	loadAutoFishState()
 	_G.AutoFishKeepOnTeleport = _G.AutoFishKeepOnTeleport ~= false
+	_G.AutoFishAutoRejoin = _G.AutoFishAutoRejoin ~= false
 	_G.AutoFishRejoining = false
 
 	local Players = game:GetService("Players")
@@ -229,7 +251,7 @@ _G.AutoFishLoad = function()
 	_G.AutoFishReturning = false
 	_G.AutoFishReturnWait = false
 	_G.AutoFishReturnWaitToken = 0
-	_G.AutoFishStats = { casts = 0, catches = 0, fails = 0, reels = 0, sells = 0, lastState = "Idle" }
+	_G.AutoFishStats = { casts = 0, catches = 0, fails = 0, reels = 0, sells = 0, rbd = 0, lastState = "Idle" }
 	_G.AutoFishTimers = { lastCast = 0, lastReel = 0 }
 
 	local startReturnDeathWait
@@ -734,10 +756,14 @@ _G.AutoFishLoad = function()
 		stowTools()
 		if soldAny then _G.AutoFishStats.sells += 1 end
 	end
-	local function returnToDock(afterRejoin)
+	local function countRbd()
+		_G.AutoFishStats.rbd = (_G.AutoFishStats.rbd or 0) + 1
+	end
+	local function returnToDock(afterRejoin, skipRbdCount)
 		if not _G.AutoFishEnabled then return end
 		if not afterRejoin and _G.AutoFishReturnOnDeath == false then return end
 		if _G.AutoFishCeremony then return end
+		if not afterRejoin and not skipRbdCount then countRbd() end
 		_G.AutoFishReturnToken += 1
 		local token = _G.AutoFishReturnToken
 		task.spawn(function()
@@ -1006,11 +1032,12 @@ _G.AutoFishLoad = function()
 			TweenService:Create(btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = base }):Play()
 		end)
 	end
-	local function makeStatCard(parent, labelText, valueName, y)
+	local function makeStatCard(parent, labelText, valueName, y, widthScale)
+		widthScale = widthScale or 0.32
 		local card = Instance.new("Frame")
 		card.BackgroundColor3 = COLORS.card
 		card.BorderSizePixel = 0
-		card.Size = UDim2.new(0.32, -4, 0, 44)
+		card.Size = UDim2.new(widthScale, -3, 0, 44)
 		card.Position = y
 		card.Parent = parent
 		corner(card, 8)
@@ -1227,9 +1254,10 @@ _G.AutoFishLoad = function()
 	local _, valCasts = makeStatCard(statsPanel, "Casts", "CastsVal", UDim2.fromScale(0, 0))
 	local _, valCatches = makeStatCard(statsPanel, "Catches", "CatchesVal", UDim2.new(0.34, 0, 0, 0))
 	local _, valSells = makeStatCard(statsPanel, "Sells", "SellsVal", UDim2.new(0.68, 0, 0, 0))
-	local _, valFails = makeStatCard(statsPanel, "Fails", "FailsVal", UDim2.fromScale(0, 0, 52))
-	local _, valReels = makeStatCard(statsPanel, "Reels", "ReelsVal", UDim2.new(0.34, 0, 0, 52))
-	local _, valState = makeStatCard(statsPanel, "State", "StateVal", UDim2.new(0.68, 0, 0, 52))
+	local _, valFails = makeStatCard(statsPanel, "Fails", "FailsVal", UDim2.fromScale(0, 0, 52), 0.24)
+	local _, valRbd = makeStatCard(statsPanel, "RBD", "RbdVal", UDim2.new(0.25, 0, 0, 52), 0.24)
+	local _, valReels = makeStatCard(statsPanel, "Reels", "ReelsVal", UDim2.new(0.5, 0, 0, 52), 0.24)
+	local _, valState = makeStatCard(statsPanel, "State", "StateVal", UDim2.new(0.75, 0, 0, 52), 0.24)
 
 	local metaLabel = Instance.new("TextLabel")
 	metaLabel.Name = "MetaLabel"
@@ -1405,6 +1433,7 @@ _G.AutoFishLoad = function()
 		statsPanel:FindFirstChild("CatchesVal", true).Text = tostring(s.catches)
 		statsPanel:FindFirstChild("SellsVal", true).Text = tostring(s.sells)
 		statsPanel:FindFirstChild("FailsVal", true).Text = tostring(s.fails)
+		statsPanel:FindFirstChild("RbdVal", true).Text = tostring(s.rbd or 0)
 		statsPanel:FindFirstChild("ReelsVal", true).Text = tostring(s.reels)
 		statsPanel:FindFirstChild("StateVal", true).Text = s.lastState
 
@@ -1486,6 +1515,7 @@ _G.AutoFishLoad = function()
 
 	startReturnDeathWait = function()
 		if not _G.AutoFishEnabled or _G.AutoFishReturnOnDeath == false then return end
+		countRbd()
 		_G.AutoFishReturnWaitToken += 1
 		local token = _G.AutoFishReturnWaitToken
 		_G.AutoFishReturnToken += 1
@@ -1513,7 +1543,7 @@ _G.AutoFishLoad = function()
 			if token ~= _G.AutoFishReturnWaitToken then return end
 			finishWait()
 			_G.AutoFishBusy = false
-			returnToDock()
+			returnToDock(false, true)
 		end
 
 		destroyReturnWaitGui()
@@ -1755,7 +1785,7 @@ _G.AutoFishLoad = function()
 		_G.AutoFishCeremonyPlayedConnection = anthem.Played:Connect(tryStartCeremony)
 	end
 
-	print("[AutoFish v8.5] Rejoin return fix — " .. AUTOFISH_SCRIPT_URL)
+	print("[AutoFish v8.6] RBD counter + auto rejoin on disconnect")
 end
 
 _G.AutoFishReset = function()
