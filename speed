@@ -1032,13 +1032,14 @@ _G.AutoFishLoad = function()
 			TweenService:Create(btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = base }):Play()
 		end)
 	end
-	local function makeStatCard(parent, labelText, valueName, y, widthScale)
-		widthScale = widthScale or 0.32
+	local function makeStatCard(parent, labelText, valueName, col, row)
+		local cols = 3
+		local cardW = 1 / cols
 		local card = Instance.new("Frame")
 		card.BackgroundColor3 = COLORS.card
 		card.BorderSizePixel = 0
-		card.Size = UDim2.new(widthScale, -3, 0, 44)
-		card.Position = y
+		card.Size = UDim2.new(cardW, -4, 0, 44)
+		card.Position = UDim2.new(cardW * col, 2, 0, 52 * row)
 		card.Parent = parent
 		corner(card, 8)
 		stroke(card, Color3.fromRGB(55, 75, 100), 1, 0.65)
@@ -1251,13 +1252,12 @@ _G.AutoFishLoad = function()
 	statsPanel.ZIndex = 3
 	statsPanel.Parent = frame
 
-	local _, valCasts = makeStatCard(statsPanel, "Casts", "CastsVal", UDim2.fromScale(0, 0))
-	local _, valCatches = makeStatCard(statsPanel, "Catches", "CatchesVal", UDim2.new(0.34, 0, 0, 0))
-	local _, valSells = makeStatCard(statsPanel, "Sells", "SellsVal", UDim2.new(0.68, 0, 0, 0))
-	local _, valFails = makeStatCard(statsPanel, "Fails", "FailsVal", UDim2.fromScale(0, 0, 52), 0.24)
-	local _, valRbd = makeStatCard(statsPanel, "RBD", "RbdVal", UDim2.new(0.25, 0, 0, 52), 0.24)
-	local _, valReels = makeStatCard(statsPanel, "Reels", "ReelsVal", UDim2.new(0.5, 0, 0, 52), 0.24)
-	local _, valState = makeStatCard(statsPanel, "State", "StateVal", UDim2.new(0.75, 0, 0, 52), 0.24)
+	local _, valCasts = makeStatCard(statsPanel, "Casts", "CastsVal", 0, 0)
+	local _, valCatches = makeStatCard(statsPanel, "Catches", "CatchesVal", 1, 0)
+	local _, valSells = makeStatCard(statsPanel, "Sells", "SellsVal", 2, 0)
+	local _, valFails = makeStatCard(statsPanel, "Fails", "FailsVal", 0, 1)
+	local _, valRbd = makeStatCard(statsPanel, "RBD", "RbdVal", 1, 1)
+	local _, valReels = makeStatCard(statsPanel, "Reels", "ReelsVal", 2, 1)
 
 	local metaLabel = Instance.new("TextLabel")
 	metaLabel.Name = "MetaLabel"
@@ -1435,14 +1435,13 @@ _G.AutoFishLoad = function()
 		statsPanel:FindFirstChild("FailsVal", true).Text = tostring(s.fails)
 		statsPanel:FindFirstChild("RbdVal", true).Text = tostring(s.rbd or 0)
 		statsPanel:FindFirstChild("ReelsVal", true).Text = tostring(s.reels)
-		statsPanel:FindFirstChild("StateVal", true).Text = s.lastState
 
 		local dockTxt = _G.AutoFishDockSpot and "set" or "auto"
 		local castTxt = _G.AutoFishCastSpot and "set" or "auto"
 		local flagTxt = _G.AutoFishFlagSpot and "set" or "default"
 		local respawnTxt = _G.AutoFishReturnOnDeath ~= false and "on" or "off"
 		metaLabel.Text = "Dock: " .. dockTxt .. "   ·   Cast: " .. castTxt .. "   ·   Flag: " .. flagTxt
-			.. "   ·   Respawn: " .. respawnTxt
+			.. "   ·   Respawn: " .. respawnTxt .. "   ·   Rod: " .. s.lastState
 
 		toggleBtn.Text = on and "Turn OFF" or "Turn ON"
 	end
