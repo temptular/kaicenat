@@ -31,6 +31,8 @@ local function spotDec(t)
 	}
 end
 
+local AUTOFISH_SCRIPT_URL = "https://raw.githubusercontent.com/temptular/kaicenat/refs/heads/main/speed"
+
 local function getAutoFishScriptUrl()
 	if getgenv and getgenv().AutoFishScriptUrl then
 		return getgenv().AutoFishScriptUrl
@@ -38,7 +40,7 @@ local function getAutoFishScriptUrl()
 	if _G.AutoFishScriptUrl then
 		return _G.AutoFishScriptUrl
 	end
-	return nil
+	return AUTOFISH_SCRIPT_URL
 end
 
 local function getQueueTeleportScript()
@@ -1698,7 +1700,7 @@ _G.AutoFishLoad = function()
 		_G.AutoFishCeremonyPlayedConnection = anthem.Played:Connect(tryStartCeremony)
 	end
 
-	print("[AutoFish v8.4] IY-style rejoin — set getgenv().AutoFishScriptUrl to raw GitHub URL")
+	print("[AutoFish v8.4] Rejoin via " .. AUTOFISH_SCRIPT_URL)
 end
 
 _G.AutoFishReset = function()
