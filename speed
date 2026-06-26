@@ -1074,7 +1074,7 @@ _G.AutoFishLoad = function()
 
 	local shadow = Instance.new("Frame")
 	shadow.Name = "Shadow"
-	shadow.Size = UDim2.fromOffset(304, 412)
+	shadow.Size = UDim2.fromOffset(304, 372)
 	shadow.Position = UDim2.new(0, 18, 0, 122)
 	shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	shadow.BackgroundTransparency = 0.55
@@ -1085,7 +1085,7 @@ _G.AutoFishLoad = function()
 
 	local frame = Instance.new("Frame")
 	frame.Name = "Main"
-	frame.Size = UDim2.fromOffset(300, 408)
+	frame.Size = UDim2.fromOffset(300, 368)
 	frame.Position = UDim2.new(0, 16, 0, 120)
 	frame.BackgroundColor3 = COLORS.bgTop
 	frame.BorderSizePixel = 0
@@ -1352,30 +1352,6 @@ _G.AutoFishLoad = function()
 	stroke(resetBtn, Color3.fromRGB(100, 140, 200), 1, 0.55)
 	hover(resetBtn, Color3.fromRGB(55, 75, 110), Color3.fromRGB(70, 95, 135))
 
-	local testRow = Instance.new("Frame")
-	testRow.BackgroundTransparency = 1
-	testRow.Size = UDim2.new(1, -32, 0, 32)
-	testRow.Position = UDim2.fromOffset(16, 354)
-	testRow.ZIndex = 3
-	testRow.Parent = frame
-
-	local testReconnectBtn = Instance.new("TextButton")
-	testReconnectBtn.Name = "TestReconnect"
-	testReconnectBtn.Size = UDim2.new(1, 0, 1, 0)
-	testReconnectBtn.BackgroundColor3 = Color3.fromRGB(90, 60, 20)
-	testReconnectBtn.Font = Enum.Font.GothamBold
-	testReconnectBtn.TextSize = 11
-	testReconnectBtn.TextColor3 = COLORS.text
-	testReconnectBtn.Text = "⚡  Test Reconnect (rod gone)"
-	testReconnectBtn.AutoButtonColor = false
-	testReconnectBtn.BorderSizePixel = 0
-	testReconnectBtn.ZIndex = 4
-	testReconnectBtn.Parent = testRow
-	corner(testReconnectBtn, 8)
-	gradient(testReconnectBtn, Color3.fromRGB(120, 80, 30), Color3.fromRGB(70, 45, 15), 90)
-	stroke(testReconnectBtn, COLORS.warn, 1, 0.45)
-	hover(testReconnectBtn, Color3.fromRGB(90, 60, 20), Color3.fromRGB(110, 75, 28))
-
 	local setCastBanner = Instance.new("TextLabel")
 	setCastBanner.Name = "SetCastBanner"
 	setCastBanner.Size = UDim2.new(1, -24, 0, 36)
@@ -1496,11 +1472,6 @@ _G.AutoFishLoad = function()
 	end)
 	setCast.MouseButton1Click:Connect(function()
 		beginSetCast()
-	end)
-	testReconnectBtn.MouseButton1Click:Connect(function()
-		_G.AutoFishPendingReturn = true
-		_G.AutoFishMode = "Test reconnect..."
-		_G.AutoFishRejoin(true)
 	end)
 
 	destroyReturnWaitGui = function()
