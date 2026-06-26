@@ -1,0 +1,1708 @@
+-- Auto Fish v8.4 — IY-style queue_on_teleport + HttpGet rejoin
+local AUTOFISH_CONFIG_DIR = "AutoFish"
+local AUTOFISH_STATE_FILE = AUTOFISH_CONFIG_DIR .. "/state.json"
+
+local queueTeleport = queue_on_teleport
+	or (syn and syn.queue_on_teleport)
+	or (fluxus and fluxus.queue_on_teleport)
+
+local function vec3Enc(v)
+	if not v then return nil end
+	return { X = v.X, Y = v.Y, Z = v.Z }
+end
+local function vec3Dec(t)
+	if not t then return nil end
+	return Vector3.new(t.X, t.Y, t.Z)
+end
+local function spotEnc(spot)
+	if not spot then return nil end
+	return {
+		position = vec3Enc(spot.position),
+		lookVector = vec3Enc(spot.lookVector),
+		setAt = spot.setAt,
+	}
+end
+local function spotDec(t)
+	if not t then return nil end
+	return {
+		position = vec3Dec(t.position),
+		lookVector = vec3Dec(t.lookVector),
+		setAt = t.setAt,
+	}
+end
+
+local function getAutoFishScriptUrl()
+	if getgenv and getgenv().AutoFishScriptUrl then
+		return getgenv().AutoFishScriptUrl
+	end
+	if _G.AutoFishScriptUrl then
+		return _G.AutoFishScriptUrl
+	end
+	return nil
+end
+
+local function getQueueTeleportScript()
+	local url = getAutoFishScriptUrl()
+	if not url then return nil end
+	return ("loadstring(game:HttpGet(%q))()"):format(url)
+end
+
+_G.AutoFishPersistState = function(pendingReturn)
+	if not writefile then return false end
+	pcall(function()
+		if isfolder and not isfolder(AUTOFISH_CONFIG_DIR) then
+			makefolder(AUTOFISH_CONFIG_DIR)
+		end
+	end)
+	local HttpService = game:GetService("HttpService")
+	local state = {
+		dock = spotEnc(_G.AutoFishDockSpot),
+		cast = spotEnc(_G.AutoFishCastSpot),
+		flag = spotEnc(_G.AutoFishFlagSpot),
+		enabled = _G.AutoFishEnabled,
+		returnOnDeath = _G.AutoFishReturnOnDeath,
+		antiAfk = _G.AutoFishAntiAfk,
+		keepOnTeleport = _G.AutoFishKeepOnTeleport ~= false,
+		pendingReturn = pendingReturn == true,
+		scriptUrl = getAutoFishScriptUrl(),
+	}
+	local ok = pcall(function()
+		writefile(AUTOFISH_STATE_FILE, HttpService:JSONEncode(state))
+	end)
+	return ok
+end
+
+local function loadAutoFishState()
+	if not readfile or not isfile or not isfile(AUTOFISH_STATE_FILE) then return end
+	local HttpService = game:GetService("HttpService")
+	local ok, data = pcall(function()
+		return HttpService:JSONDecode(readfile(AUTOFISH_STATE_FILE))
+	end)
+	if not ok or type(data) ~= "table" then return end
+	if data.dock then _G.AutoFishDockSpot = spotDec(data.dock) end
+	if data.cast then _G.AutoFishCastSpot = spotDec(data.cast) end
+	if data.flag then _G.AutoFishFlagSpot = spotDec(data.flag) end
+	if data.enabled ~= nil then _G.AutoFishEnabled = data.enabled end
+	if data.returnOnDeath ~= nil then _G.AutoFishReturnOnDeath = data.returnOnDeath end
+	if data.antiAfk ~= nil then _G.AutoFishAntiAfk = data.antiAfk end
+	if data.keepOnTeleport ~= nil then _G.AutoFishKeepOnTeleport = data.keepOnTeleport ~= false end
+	if data.pendingReturn then _G.AutoFishPendingReturn = true end
+	if data.scriptUrl then
+		_G.AutoFishScriptUrl = data.scriptUrl
+		if getgenv then getgenv().AutoFishScriptUrl = data.scriptUrl end
+	end
+end
+
+local function queueAutoFishOnTeleport()
+	if not queueTeleport then return false end
+	local script = getQueueTeleportScript()
+	if not script then
+		warn("[AutoFish] Set getgenv().AutoFishScriptUrl to a raw script URL (GitHub raw, etc.)")
+		return false
+	end
+	queueTeleport(script)
+	return true
+end
+
+_G.AutoFishRejoin = function(pendingReturn)
+	if _G.AutoFishRejoining then return end
+	_G.AutoFishRejoining = true
+	pendingReturn = pendingReturn ~= false
+	_G.AutoFishPendingReturn = pendingReturn
+	_G.AutoFishPersistState(pendingReturn)
+	queueAutoFishOnTeleport()
+	local Players = game:GetService("Players")
+	local TeleportService = game:GetService("TeleportService")
+	local LocalPlayer = Players.LocalPlayer
+	local placeId = game.PlaceId
+	if #Players:GetPlayers() <= 1 then
+		LocalPlayer:Kick("\nAutoFish rejoining...")
+		task.wait()
+		TeleportService:Teleport(placeId, LocalPlayer)
+	else
+		TeleportService:TeleportToPlaceInstance(placeId, game.JobId, LocalPlayer)
+	end
+end
+
+if not _G.AutoFishTeleportHooked then
+	_G.AutoFishTeleportHooked = true
+	local Players = game:GetService("Players")
+	local LocalPlayer = Players.LocalPlayer
+	local teleportCheck = false
+	LocalPlayer.OnTeleport:Connect(function()
+		if _G.AutoFishKeepOnTeleport == false then return end
+		if teleportCheck or not queueTeleport then return end
+		teleportCheck = true
+		_G.AutoFishPersistState(_G.AutoFishPendingReturn == true)
+		queueAutoFishOnTeleport()
+	end)
+end
+
+_G.AutoFishCleanup = function()
+	if _G.AutoFishCharacterConnection then pcall(function() _G.AutoFishCharacterConnection:Disconnect() end) _G.AutoFishCharacterConnection = nil end
+	if _G.AutoFishAfkPulseConnection then pcall(function() _G.AutoFishAfkPulseConnection:Disconnect() end) _G.AutoFishAfkPulseConnection = nil end
+	if _G.AutoFishAfkAttrConnection then pcall(function() _G.AutoFishAfkAttrConnection:Disconnect() end) _G.AutoFishAfkAttrConnection = nil end
+	if _G.AutoFishIdledConnection then pcall(function() _G.AutoFishIdledConnection:Disconnect() end) _G.AutoFishIdledConnection = nil end
+	if _G.AutoFishCeremonyFaceConn then pcall(function() _G.AutoFishCeremonyFaceConn:Disconnect() end) _G.AutoFishCeremonyFaceConn = nil end
+	if _G.AutoFishCeremonyConnection then pcall(function() _G.AutoFishCeremonyConnection:Disconnect() end) _G.AutoFishCeremonyConnection = nil end
+	if _G.AutoFishCeremonyPlayedConnection then pcall(function() _G.AutoFishCeremonyPlayedConnection:Disconnect() end) _G.AutoFishCeremonyPlayedConnection = nil end
+	_G.AutoFishCeremonyToken = (_G.AutoFishCeremonyToken or 0) + 1
+	_G.AutoFishCeremony = false
+	if _G.AutoFishHeartbeat then pcall(function() _G.AutoFishHeartbeat:Disconnect() end) _G.AutoFishHeartbeat = nil end
+	if _G.AutoFishGuiHeartbeat then pcall(function() _G.AutoFishGuiHeartbeat:Disconnect() end) _G.AutoFishGuiHeartbeat = nil end
+	if _G.AutoFishSetCastConnection then pcall(function() _G.AutoFishSetCastConnection:Disconnect() end) _G.AutoFishSetCastConnection = nil end
+	if _G.AutoFishPulseTween then pcall(function() _G.AutoFishPulseTween:Cancel() end) _G.AutoFishPulseTween = nil end
+	if _G.AutoFishToggleUIConnection then pcall(function() _G.AutoFishToggleUIConnection:Disconnect() end) _G.AutoFishToggleUIConnection = nil end
+	if _G.AutoFishRodConnection then pcall(function() _G.AutoFishRodConnection:Disconnect() end) _G.AutoFishRodConnection = nil end
+	if _G.AutoFishReturnWaitHoldConnection then pcall(function() _G.AutoFishReturnWaitHoldConnection:Disconnect() end) _G.AutoFishReturnWaitHoldConnection = nil end
+	if _G.AutoFishReturnWaitGuiConnection then pcall(function() _G.AutoFishReturnWaitGuiConnection:Disconnect() end) _G.AutoFishReturnWaitGuiConnection = nil end
+	_G.AutoFishReturnWaitToken = (_G.AutoFishReturnWaitToken or 0) + 1
+	_G.AutoFishReturnWait = false
+	_G.AutoFishSetCastMode = false
+	local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+	if pg then
+		local g = pg:FindFirstChild("AutoFishGui")
+		if g then g:Destroy() end
+		local wg = pg:FindFirstChild("AutoFishReturnWaitGui")
+		if wg then wg:Destroy() end
+	end
+	_G.AutoFishBusy = false
+	_G.AutoFishReturning = false
+end
+
+_G.AutoFishLoad = function()
+	_G.AutoFishCleanup()
+	loadAutoFishState()
+	_G.AutoFishKeepOnTeleport = _G.AutoFishKeepOnTeleport ~= false
+	_G.AutoFishRejoining = false
+
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
+	local PathfindingService = game:GetService("PathfindingService")
+	local SoundService = game:GetService("SoundService")
+	local TweenService = game:GetService("TweenService")
+	local VirtualInputManager = game:GetService("VirtualInputManager")
+	local VirtualUser = game:GetService("VirtualUser")
+	local UserInputService = game:GetService("UserInputService")
+	local LocalPlayer = Players.LocalPlayer
+	local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+	local ROD_NAME = "Legendary Fishing Rod"
+	local WATER_Y, BAR_CENTER, SAFE_MIN, SAFE_MAX = 50.34375, 0.5, 0.41, 0.58
+	local CAST_COOLDOWN, MAX_FISH, SELL_DELAY = 1.2, 5, 1
+	local CEREMONY_UNEQUIP_WAIT, CEREMONY_FACE_WAIT = 1, 3
+	local ROD_MISSING_REJOIN_SEC = 10
+	local RETURN_DEATH_WAIT_MIN, RETURN_DEATH_WAIT_MAX = 5 * 60, 15 * 60
+
+	if _G.AutoFishEnabled == nil then _G.AutoFishEnabled = true end
+	_G.AutoFishBusy = false
+	_G.AutoFishCeremony = false
+	_G.AutoFishCeremonyToken = 0
+	_G.AutoFishMode = "Fishing"
+	_G.AutoFishSetCastMode = false
+	_G.AutoFishReturnOnDeath = _G.AutoFishReturnOnDeath ~= false
+	_G.AutoFishAntiAfk = _G.AutoFishAntiAfk ~= false
+	_G.AutoFishReturnToken = 0
+	_G.AutoFishReturning = false
+	_G.AutoFishReturnWait = false
+	_G.AutoFishReturnWaitToken = 0
+	_G.AutoFishStats = { casts = 0, catches = 0, fails = 0, reels = 0, sells = 0, lastState = "Idle" }
+	_G.AutoFishTimers = { lastCast = 0, lastReel = 0 }
+
+	local startReturnDeathWait
+	local destroyReturnWaitGui
+
+	local COLORS = {
+		bgTop = Color3.fromRGB(12, 20, 32),
+		bgBottom = Color3.fromRGB(22, 36, 54),
+		accent = Color3.fromRGB(56, 189, 178),
+		accentDim = Color3.fromRGB(34, 120, 112),
+		text = Color3.fromRGB(240, 248, 255),
+		muted = Color3.fromRGB(148, 163, 184),
+		card = Color3.fromRGB(30, 45, 64),
+		cardHover = Color3.fromRGB(38, 56, 78),
+		success = Color3.fromRGB(74, 222, 128),
+		danger = Color3.fromRGB(248, 113, 113),
+		warn = Color3.fromRGB(251, 191, 36),
+		progressBg = Color3.fromRGB(15, 26, 40),
+		progressFill = Color3.fromRGB(45, 212, 191),
+	}
+
+	local function getDockPos()
+		if _G.AutoFishDockSpot and _G.AutoFishDockSpot.position then return _G.AutoFishDockSpot.position end
+		return Vector3.new(1839.941650390625, 272.7584533691406, 552.4816284179688)
+	end
+	local function getDockLook()
+		if _G.AutoFishDockSpot and _G.AutoFishDockSpot.lookVector then return _G.AutoFishDockSpot.lookVector end
+		return Vector3.new(-0.7151891589164734, 0, -0.6989309787750244)
+	end
+	local function getSellPrompt()
+		if _G.AutoFishSellSpot and _G.AutoFishSellSpot.prompt and _G.AutoFishSellSpot.prompt.Parent then
+			return _G.AutoFishSellSpot.prompt
+		end
+		local dockPos = getDockPos()
+		local bestPrompt, bestDist
+		for _, inst in ipairs(workspace:GetDescendants()) do
+			if inst:IsA("ProximityPrompt") and inst.ActionText == "Sell Fish" then
+				local parent = inst.Parent
+				local npcPos = parent and parent:IsA("BasePart") and parent.Position
+				if npcPos then
+					local flat = Vector3.new(npcPos.X - dockPos.X, 0, npcPos.Z - dockPos.Z)
+					if not bestDist or flat.Magnitude < bestDist then
+						bestPrompt, bestDist = inst, flat.Magnitude
+					end
+				end
+			end
+		end
+		return bestPrompt
+	end
+	local function getSellPos()
+		if _G.AutoFishSellSpot and _G.AutoFishSellSpot.position then return _G.AutoFishSellSpot.position end
+		local prompt = getSellPrompt()
+		local sheenPos = prompt and prompt.Parent and prompt.Parent:IsA("BasePart") and prompt.Parent.Position
+			or Vector3.new(1815.7200927734375, 246.65554809570312, 505.8079528808594)
+		local dockPos = getDockPos()
+		local flat = Vector3.new(dockPos.X - sheenPos.X, 0, dockPos.Z - sheenPos.Z)
+		if flat.Magnitude > 0.1 then return sheenPos + flat.Unit * 5 end
+		return sheenPos + Vector3.new(5, 0, 0)
+	end
+	local function getFlagPos()
+		if _G.AutoFishFlagSpot and _G.AutoFishFlagSpot.position then return _G.AutoFishFlagSpot.position end
+		return Vector3.new(1248.4837646484375, 90, -275.8426513671875)
+	end
+	local function countFish()
+		local n = 0
+		local function scan(p)
+			if p then
+				for _, c in ipairs(p:GetChildren()) do
+					if c:IsA("Tool") and c:GetAttribute("FishType") then n += 1 end
+				end
+			end
+		end
+		scan(LocalPlayer.Backpack)
+		scan(LocalPlayer.Character)
+		return n
+	end
+	local function findRodIn(parent)
+		return parent and parent:FindFirstChild(ROD_NAME)
+	end
+	local function getRod()
+		local char = LocalPlayer.Character
+		local rod = findRodIn(char)
+		if rod then return rod end
+		local f = workspace:FindFirstChild(LocalPlayer.Name)
+		rod = findRodIn(f)
+		if rod then return rod end
+		return findRodIn(LocalPlayer.Backpack)
+	end
+	local function getNextFish()
+		for _, c in ipairs(LocalPlayer.Backpack:GetChildren()) do
+			if c:IsA("Tool") and c:GetAttribute("FishType") then return c end
+		end
+		local char = LocalPlayer.Character
+		if char then
+			for _, c in ipairs(char:GetChildren()) do
+				if c:IsA("Tool") and c:GetAttribute("FishType") then return c end
+			end
+		end
+	end
+	local function getState(tool) return tool:GetAttribute("FishingState") or "Idle" end
+	local function getFishingClient(tool)
+		if not getgc then return end
+		local remote = tool and tool:FindFirstChild("FishingInput")
+		if not remote then return end
+		for _, v in ipairs(getgc(true)) do
+			if type(v) == "table" and rawget(v, "_inputRemote") and v._inputRemote == remote then return v end
+		end
+	end
+	local function getBarPosition(tool)
+		local client = getFishingClient(tool)
+		if client and typeof(client._playerPosition) == "number" then return client._playerPosition end
+		local g = PlayerGui:FindFirstChild("QuickTimeGui")
+		if g and g.Enabled then
+			local pf = g:FindFirstChild("MainFrame") and g.MainFrame:FindFirstChild("PlayerFrame")
+			if pf then return pf.Position.X.Scale end
+		end
+	end
+	local function getCastPoint()
+		if _G.AutoFishCastSpot and _G.AutoFishCastSpot.position then return _G.AutoFishCastSpot.position end
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		for _, inst in ipairs(workspace:GetChildren()) do
+			if inst.Name == "FishingBobber" and inst:IsA("BasePart") and (inst.Position - hrp.Position).Magnitude <= 150 then
+				return inst.Position
+			end
+		end
+		local fwd = hrp.Position + hrp.CFrame.LookVector * 25
+		return Vector3.new(fwd.X, WATER_Y, fwd.Z)
+	end
+	local function facePoint(pt)
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if hrp then hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(pt.X, hrp.Position.Y, pt.Z)) end
+	end
+	local function faceLook(look)
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if hrp then hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + look) end
+	end
+	local function clickScreenAtWorld(pt)
+		local cam = workspace.CurrentCamera
+		if not cam then return false end
+		local screen, onScreen = cam:WorldToViewportPoint(pt)
+		if not onScreen then return false end
+		VirtualInputManager:SendMouseButtonEvent(screen.X, screen.Y, 0, true, game, 1)
+		VirtualInputManager:SendMouseButtonEvent(screen.X, screen.Y, 0, false, game, 1)
+		return true
+	end
+	local function castRod(tool)
+		local pt = getCastPoint()
+		if not pt then return false end
+		facePoint(pt)
+		task.wait(0.05)
+		clickScreenAtWorld(pt)
+		tool:Activate()
+		return true
+	end
+	local function equipRod(tool)
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum and tool and tool.Parent == LocalPlayer.Backpack then hum:EquipTool(tool) end
+	end
+	local function stowTools()
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum:UnequipTools() end
+	end
+	local function stopCeremonyFacing()
+		if _G.AutoFishCeremonyFaceConn then
+			pcall(function() _G.AutoFishCeremonyFaceConn:Disconnect() end)
+			_G.AutoFishCeremonyFaceConn = nil
+		end
+		_G.AutoFishCeremonyMaintainFace = false
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then
+			if _G.AutoFishCeremonySavedAutoRotate ~= nil then
+				hum.AutoRotate = _G.AutoFishCeremonySavedAutoRotate
+			else
+				hum.AutoRotate = true
+			end
+			_G.AutoFishCeremonySavedAutoRotate = nil
+		end
+	end
+	local function applyCeremonyFace()
+		local flagPos = getFlagPos()
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(flagPos.X, hrp.Position.Y, flagPos.Z))
+		end
+	end
+	local function startCeremonyFacing()
+		stopCeremonyFacing()
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not hum or not hrp then return false end
+		hum:MoveTo(hrp.Position)
+		_G.AutoFishCeremonySavedAutoRotate = hum.AutoRotate
+		hum.AutoRotate = false
+		applyCeremonyFace()
+		task.defer(applyCeremonyFace)
+		return true
+	end
+	local function pressSaluteKey()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.B, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.B, false, game)
+	end
+	local function getAnthemSound()
+		return SoundService:FindFirstChild("HourlyStarSpangledBanner")
+	end
+	local function waitForAnthemEnd(token)
+		local anthem = getAnthemSound()
+		if not anthem then return end
+		_G.AutoFishMode = "Ceremony: anthem"
+		local deadline = tick() + math.max(anthem.TimeLength + 8, 90)
+		while tick() < deadline do
+			if token ~= _G.AutoFishCeremonyToken then return end
+			if not anthem.IsPlaying then break end
+			task.wait(0.25)
+		end
+	end
+	local function finishCeremony(token)
+		if token and token ~= _G.AutoFishCeremonyToken then return end
+		stopCeremonyFacing()
+		_G.AutoFishCeremony = false
+		if not _G.AutoFishBusy then _G.AutoFishMode = "Fishing" end
+		local rod = getRod()
+		if rod and _G.AutoFishEnabled then equipRod(rod) end
+	end
+	local function runCeremony()
+		if _G.AutoFishCeremony then return end
+		if _G.AutoFishBusy and not _G.AutoFishReturning and not _G.AutoFishReturnWait then return end
+		if _G.AutoFishReturning or _G.AutoFishReturnWait then
+			_G.AutoFishReturnToken += 1
+			_G.AutoFishReturning = false
+			if _G.AutoFishReturnWait then
+				_G.AutoFishReturnWaitToken += 1
+				_G.AutoFishReturnWait = false
+				if destroyReturnWaitGui then destroyReturnWaitGui() end
+				if _G.AutoFishReturnWaitHoldConnection then
+					pcall(function() _G.AutoFishReturnWaitHoldConnection:Disconnect() end)
+					_G.AutoFishReturnWaitHoldConnection = nil
+				end
+			end
+			_G.AutoFishBusy = false
+		end
+		_G.AutoFishCeremony = true
+		_G.AutoFishCeremonyToken += 1
+		local token = _G.AutoFishCeremonyToken
+		local ok, err = pcall(function()
+			_G.AutoFishMode = "Ceremony: unequip"
+			stowTools()
+			task.wait(CEREMONY_UNEQUIP_WAIT)
+			if token ~= _G.AutoFishCeremonyToken then return end
+			_G.AutoFishMode = "Ceremony: face flag"
+			if not startCeremonyFacing() then
+				error("Could not face flag")
+			end
+			task.wait(CEREMONY_FACE_WAIT)
+			if token ~= _G.AutoFishCeremonyToken then return end
+			_G.AutoFishMode = "Ceremony: saluting"
+			pressSaluteKey()
+			if token ~= _G.AutoFishCeremonyToken then return end
+			waitForAnthemEnd(token)
+		end)
+		if not ok then
+			warn("[AutoFish] Ceremony failed:", err)
+			_G.AutoFishMode = "Ceremony failed"
+		end
+		finishCeremony(token)
+	end
+	_G.AutoFishRunCeremony = runCeremony
+	_G.AutoFishFaceFlag = function()
+		return startCeremonyFacing()
+	end
+	local function getReelCooldown(tool)
+		return math.clamp((tonumber(tool:GetAttribute("ClickForce")) or 0.045) / (tonumber(tool:GetAttribute("DrainSpeed")) or 0.2), 0.18, 0.32)
+	end
+	local function shouldReel(tool)
+		local pos = getBarPosition(tool)
+		if pos == nil then return false end
+		if pos >= SAFE_MAX then return false end
+		if pos <= SAFE_MIN then return true end
+		return pos < BAR_CENTER - 0.015
+	end
+	local PATH_AGENT = {
+		AgentRadius = 2,
+		AgentHeight = 5,
+		AgentCanJump = true,
+		AgentCanClimb = true,
+		WaypointSpacing = 4,
+	}
+	local STUCK_DETECT_SEC, JUMP_BURST_SEC, PROGRESS_DIST = 3, 5, 1.2
+	local function refreshWalkCharacter()
+		local char = LocalPlayer.Character
+		if not char then return nil, nil end
+		return char:FindFirstChildOfClass("Humanoid"), char:FindFirstChild("HumanoidRootPart")
+	end
+	local function runJumpBurst(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt)
+		local burstEnd = tick() + JUMP_BURST_SEC
+		while tick() < burstEnd and tick() < segmentDeadline do
+			if aborted() then return false, lastProgressPos, lastProgressAt end
+			hum:MoveTo(movePos)
+			hum.Jump = true
+			task.wait(0.1)
+			hum, hrp = refreshWalkCharacter()
+			if not hum or not hrp then return false, lastProgressPos, lastProgressAt end
+			local moved = (hrp.Position - lastProgressPos).Magnitude
+			if moved >= PROGRESS_DIST then
+				lastProgressPos = hrp.Position
+				lastProgressAt = tick()
+			end
+		end
+		return true, lastProgressPos, tick()
+	end
+	local function waitWhileMoving(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt, arrivedFn)
+		while tick() < segmentDeadline do
+			hum, hrp = refreshWalkCharacter()
+			if not hum or not hrp then return false, lastProgressPos, lastProgressAt end
+			if aborted() then return false, lastProgressPos, lastProgressAt end
+			if arrivedFn and arrivedFn(hrp) then
+				return true, lastProgressPos, lastProgressAt
+			end
+			hum:MoveTo(movePos)
+			local moved = (hrp.Position - lastProgressPos).Magnitude
+			if moved >= PROGRESS_DIST then
+				lastProgressPos = hrp.Position
+				lastProgressAt = tick()
+			elseif tick() - lastProgressAt >= STUCK_DETECT_SEC then
+				local ok
+				ok, lastProgressPos, lastProgressAt = runJumpBurst(hum, hrp, movePos, segmentDeadline, aborted, lastProgressPos, lastProgressAt)
+				if not ok then return false, lastProgressPos, lastProgressAt end
+			end
+			task.wait(0.12)
+		end
+		hum, hrp = refreshWalkCharacter()
+		if hum and hrp and arrivedFn and arrivedFn(hrp) then
+			return true, lastProgressPos, lastProgressAt
+		end
+		return nil, lastProgressPos, lastProgressAt
+	end
+	local function nearPos(a, b, flatRange, yRange)
+		flatRange = flatRange or 5
+		yRange = yRange or 14
+		local flat = Vector3.new(a.X - b.X, 0, a.Z - b.Z)
+		return flat.Magnitude <= flatRange and math.abs(a.Y - b.Y) <= yRange
+	end
+	local function walkTo(targetPos, timeout, shouldContinue)
+		timeout = timeout or 45
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not hum or not hrp then return false end
+
+		local function aborted()
+			if shouldContinue and not shouldContinue() then
+				hum:MoveTo(hrp.Position)
+				return true
+			end
+			return false
+		end
+
+		if nearPos(hrp.Position, targetPos) then
+			hum:MoveTo(hrp.Position)
+			return true
+		end
+
+		local deadline = tick() + timeout
+		local lastProgressPos = hrp.Position
+		local lastProgressAt = tick()
+
+		while tick() < deadline do
+			hum, hrp = refreshWalkCharacter()
+			if not hum or not hrp then return false end
+			if aborted() then return false end
+			if _G.AutoFishTryStartCeremony then
+				local anthem = SoundService:FindFirstChild("HourlyStarSpangledBanner")
+				if anthem and anthem.IsPlaying and not _G.AutoFishCeremony then
+					_G.AutoFishTryStartCeremony()
+				end
+			end
+			if nearPos(hrp.Position, targetPos) then
+				hum:MoveTo(hrp.Position)
+				return true
+			end
+
+			local path = PathfindingService:CreatePath(PATH_AGENT)
+			local computeOk = pcall(function()
+				path:ComputeAsync(hrp.Position, targetPos)
+			end)
+			local status = computeOk and path.Status or nil
+			if status ~= Enum.PathStatus.Success and status ~= Enum.PathStatus.ClosestNoPath then
+				hum:MoveTo(targetPos)
+				local segEnd = tick() + 10
+				local ok
+				ok, lastProgressPos, lastProgressAt = waitWhileMoving(hum, hrp, targetPos, segEnd, aborted, lastProgressPos, lastProgressAt, function(root)
+					return nearPos(root.Position, targetPos)
+				end)
+				if ok == false then return false end
+				if ok and nearPos(hrp.Position, targetPos) then
+					hum:MoveTo(hrp.Position)
+					return true
+				end
+			else
+				local waypoints = path:GetWaypoints()
+				if #waypoints <= 1 then
+					hum:MoveTo(targetPos)
+					local segEnd = tick() + 10
+					local ok
+					ok, lastProgressPos, lastProgressAt = waitWhileMoving(hum, hrp, targetPos, segEnd, aborted, lastProgressPos, lastProgressAt, function(root)
+						return nearPos(root.Position, targetPos)
+					end)
+					if ok == false then return false end
+				else
+					for wpIndex = 2, #waypoints do
+						if aborted() then return false end
+						if tick() >= deadline then break end
+						if nearPos(hrp.Position, targetPos) then
+							hum:MoveTo(hrp.Position)
+							return true
+						end
+
+						local wp = waypoints[wpIndex]
+						if wp.Action == Enum.PathWaypointAction.Jump then
+							hum.Jump = true
+						end
+						hum:MoveTo(wp.Position)
+
+						local wpDeadline = tick() + 10
+						local ok
+						ok, lastProgressPos, lastProgressAt = waitWhileMoving(hum, hrp, wp.Position, wpDeadline, aborted, lastProgressPos, lastProgressAt, function(root)
+							return nearPos(root.Position, wp.Position, 4, 10) or nearPos(root.Position, targetPos)
+						end)
+						if ok == false then return false end
+						if nearPos(hrp.Position, targetPos) then
+							hum:MoveTo(hrp.Position)
+							return true
+						end
+					end
+				end
+			end
+
+			if nearPos(hrp.Position, targetPos, 8, 16) then
+				hum:MoveTo(hrp.Position)
+				return true
+			end
+			task.wait(0.15)
+		end
+
+		if aborted() then return false end
+		return nearPos(hrp.Position, targetPos, 8, 16)
+	end
+	local function sellHeldFish()
+		local prompt = getSellPrompt()
+		if not prompt then return false end
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not hrp or (hrp.Position - prompt.Parent.Position).Magnitude > prompt.MaxActivationDistance then return false end
+		if fireproximityprompt then
+			fireproximityprompt(prompt)
+		else
+			prompt:InputHoldBegin()
+			task.wait(prompt.HoldDuration + 0.15)
+			prompt:InputHoldEnd()
+		end
+		return true
+	end
+	local function sellAllFish()
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		local soldAny = false
+		while countFish() > 0 do
+			stowTools()
+			task.wait(0.15)
+			local fish = getNextFish()
+			if not fish or not fish.Parent then break end
+			_G.AutoFishMode = "Selling: " .. fish.Name
+			hum:EquipTool(fish)
+			task.wait(0.3)
+			sellHeldFish()
+			soldAny = true
+			task.wait(SELL_DELAY)
+		end
+		stowTools()
+		if soldAny then _G.AutoFishStats.sells += 1 end
+	end
+	local function returnToDock()
+		if not _G.AutoFishEnabled or _G.AutoFishReturnOnDeath == false then return end
+		if _G.AutoFishCeremony then return end
+		_G.AutoFishReturnToken += 1
+		local token = _G.AutoFishReturnToken
+		task.spawn(function()
+			local char = LocalPlayer.Character
+			if not char then return end
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			local hrp = char:FindFirstChild("HumanoidRootPart")
+			if not hum or not hrp then return end
+			if token ~= _G.AutoFishReturnToken then return end
+			_G.AutoFishReturning = true
+			_G.AutoFishBusy = true
+			stowTools()
+			_G.AutoFishMode = "Returning to dock"
+			local function stillReturning()
+				return token == _G.AutoFishReturnToken and not _G.AutoFishCeremony
+			end
+			walkTo(getDockPos(), 120, stillReturning)
+			if token ~= _G.AutoFishReturnToken then return end
+			char = LocalPlayer.Character
+			hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not hum or hum.Health <= 0 then return end
+			if not stillReturning() then
+				if not _G.AutoFishCeremony then
+					_G.AutoFishReturning = false
+					_G.AutoFishBusy = false
+				end
+				return
+			end
+			faceLook(getDockLook())
+			if token ~= _G.AutoFishReturnToken then return end
+			char = LocalPlayer.Character
+			hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not hum or hum.Health <= 0 then return end
+			_G.AutoFishReturning = false
+			_G.AutoFishBusy = false
+			_G.AutoFishMode = "Fishing"
+		end)
+	end
+	local function pulseServerNotAfk()
+		if not _G.AutoFishAntiAfk or not _G.AutoFishAfkRemoting then return end
+		pcall(function()
+			_G.AutoFishAfkRemoting:FireServer("IMightBeAFK", false)
+		end)
+	end
+	local function blockActivityControllerAfk()
+		if not getconnections then return end
+		for _, conn in ipairs(getconnections(UserInputService.WindowFocusReleased)) do
+			local fn = conn.Function
+			if typeof(fn) == "function" and debug and debug.info then
+				local ok, src = pcall(debug.info, fn, "s")
+				if ok and src and tostring(src):find("ActivityController") then
+					pcall(function() conn:Disable() end)
+				end
+			end
+		end
+	end
+	local function hookAfkRemote(afkEvent)
+		if not afkEvent or not hookfunction or _G.AutoFishAfkRemoteHook then return end
+		local oldFire = afkEvent.FireServer
+		local function wrapped(...)
+			if _G.AutoFishAntiAfk ~= false then
+				local args = { ... }
+				local afkArg = args[1]
+				if typeof(afkArg) == "Instance" then
+					afkArg = args[2]
+				end
+				if afkArg == true then
+					if typeof(args[1]) == "Instance" then
+						return oldFire(args[1], false)
+					end
+					return oldFire(false)
+				end
+			end
+			return oldFire(...)
+		end
+		if newcclosure then
+			wrapped = newcclosure(wrapped)
+		end
+		_G.AutoFishAfkRemoteHook = hookfunction(oldFire, wrapped)
+	end
+	local function setupServerAntiAfk()
+		local packages = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
+		local remotingModule = packages and packages:FindFirstChild("Remoting")
+		if remotingModule then
+			local ok, Remoting = pcall(require, remotingModule)
+			if ok then
+				_G.AutoFishAfkRemoting = Remoting.new(LocalPlayer, "Player")
+			end
+		end
+
+		local playerRemotes = LocalPlayer:WaitForChild("PlayerRemotes", 30)
+		local afkEvent = playerRemotes and playerRemotes:WaitForChild("IMightBeAFKEvent", 30)
+		hookAfkRemote(afkEvent)
+		blockActivityControllerAfk()
+
+		if _G.AutoFishAfkPulseConnection then
+			pcall(function() _G.AutoFishAfkPulseConnection:Disconnect() end)
+		end
+		local lastPulse = 0
+		_G.AutoFishAfkPulseConnection = RunService.Heartbeat:Connect(function()
+			if not _G.AutoFishAntiAfk then return end
+			local now = tick()
+			if now - lastPulse < 4 then return end
+			lastPulse = now
+			pulseServerNotAfk()
+		end)
+
+		if _G.AutoFishAfkAttrConnection then
+			pcall(function() _G.AutoFishAfkAttrConnection:Disconnect() end)
+		end
+		_G.AutoFishAfkAttrConnection = LocalPlayer:GetAttributeChangedSignal("AFK"):Connect(function()
+			if LocalPlayer:GetAttribute("AFK") == true then
+				pulseServerNotAfk()
+			end
+		end)
+
+		if _G.AutoFishIdledConnection then
+			pcall(function() _G.AutoFishIdledConnection:Disconnect() end)
+		end
+		_G.AutoFishIdledConnection = LocalPlayer.Idled:Connect(function()
+			if not _G.AutoFishAntiAfk then return end
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+			pulseServerNotAfk()
+		end)
+
+		pulseServerNotAfk()
+	end
+
+	local function formatWaitTime(seconds)
+		seconds = math.max(0, math.ceil(seconds))
+		return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+	end
+	local function holdStill()
+		local char = LocalPlayer.Character
+		if not char then return end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		if hum and hrp then
+			hum:MoveTo(hrp.Position)
+		end
+	end
+
+	local function setupCharacterHooks()
+		local pendingRespawnReturn = false
+		local pendingDeathDuringReturn = false
+		local function hookCharacter(char)
+			local hum = char:WaitForChild("Humanoid", 15)
+			if hum then
+				hum.Died:Connect(function()
+					if _G.AutoFishReturning or _G.AutoFishReturnWait then
+						pendingDeathDuringReturn = true
+						_G.AutoFishReturnToken += 1
+						if _G.AutoFishReturnWait then
+							_G.AutoFishReturnWaitToken += 1
+							_G.AutoFishReturnWait = false
+							if destroyReturnWaitGui then destroyReturnWaitGui() end
+							if _G.AutoFishReturnWaitHoldConnection then
+								pcall(function() _G.AutoFishReturnWaitHoldConnection:Disconnect() end)
+								_G.AutoFishReturnWaitHoldConnection = nil
+							end
+						end
+					elseif _G.AutoFishEnabled and _G.AutoFishReturnOnDeath ~= false then
+						pendingRespawnReturn = true
+					end
+				end)
+			end
+			if pendingDeathDuringReturn then
+				pendingDeathDuringReturn = false
+				task.spawn(function()
+					char:WaitForChild("HumanoidRootPart", 15)
+					task.wait(0.35)
+					if startReturnDeathWait then startReturnDeathWait() end
+				end)
+			elseif pendingRespawnReturn then
+				pendingRespawnReturn = false
+				task.spawn(function()
+					char:WaitForChild("HumanoidRootPart", 15)
+					task.wait(0.35)
+					returnToDock()
+				end)
+			end
+		end
+		if _G.AutoFishCharacterConnection then
+			pcall(function() _G.AutoFishCharacterConnection:Disconnect() end)
+		end
+		_G.AutoFishCharacterConnection = LocalPlayer.CharacterAdded:Connect(function(char)
+			task.defer(function()
+				hookCharacter(char)
+			end)
+		end)
+		if LocalPlayer.Character then
+			task.defer(function()
+				hookCharacter(LocalPlayer.Character)
+			end)
+		end
+	end
+	local function runSellTrip()
+		if _G.AutoFishBusy then return end
+		_G.AutoFishBusy = true
+		stowTools()
+		_G.AutoFishMode = "Walking to sell"
+		walkTo(getSellPos(), 60)
+		sellAllFish()
+		_G.AutoFishMode = "Walking to dock"
+		walkTo(getDockPos(), 120)
+		faceLook(getDockLook())
+		local rod = getRod()
+		if rod then equipRod(rod) end
+		_G.AutoFishMode = "Fishing"
+		_G.AutoFishBusy = false
+	end
+	local function trackState(tool)
+		local state = getState(tool)
+		if state ~= _G.AutoFishStats.lastState then
+			if state == "Success" then _G.AutoFishStats.catches += 1 end
+			if state == "Fail" then _G.AutoFishStats.fails += 1 end
+			_G.AutoFishStats.lastState = state
+		end
+	end
+
+	-- UI helpers
+	local function corner(parent, r)
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, r)
+		c.Parent = parent
+		return c
+	end
+	local function stroke(parent, color, thickness, transparency)
+		local s = Instance.new("UIStroke")
+		s.Color = color
+		s.Thickness = thickness or 1
+		s.Transparency = transparency or 0.5
+		s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		s.Parent = parent
+		return s
+	end
+	local function gradient(parent, c0, c1, rot)
+		local g = Instance.new("UIGradient")
+		g.Color = ColorSequence.new(c0, c1)
+		g.Rotation = rot or 90
+		g.Parent = parent
+		return g
+	end
+	local function pad(parent, t, r, b, l)
+		local p = Instance.new("UIPadding")
+		p.PaddingTop = UDim.new(0, t)
+		p.PaddingRight = UDim.new(0, r)
+		p.PaddingBottom = UDim.new(0, b)
+		p.PaddingLeft = UDim.new(0, l)
+		p.Parent = parent
+		return p
+	end
+	local function hover(btn, base, hover)
+		btn.MouseEnter:Connect(function()
+			TweenService:Create(btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = hover }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			TweenService:Create(btn, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = base }):Play()
+		end)
+	end
+	local function makeStatCard(parent, labelText, valueName, y)
+		local card = Instance.new("Frame")
+		card.BackgroundColor3 = COLORS.card
+		card.BorderSizePixel = 0
+		card.Size = UDim2.new(0.32, -4, 0, 44)
+		card.Position = y
+		card.Parent = parent
+		corner(card, 8)
+		stroke(card, Color3.fromRGB(55, 75, 100), 1, 0.65)
+		local lbl = Instance.new("TextLabel")
+		lbl.BackgroundTransparency = 1
+		lbl.Size = UDim2.new(1, 0, 0, 14)
+		lbl.Position = UDim2.fromOffset(0, 6)
+		lbl.Font = Enum.Font.GothamMedium
+		lbl.TextSize = 10
+		lbl.TextColor3 = COLORS.muted
+		lbl.Text = string.upper(labelText)
+		lbl.Parent = card
+		local val = Instance.new("TextLabel")
+		val.Name = valueName
+		val.BackgroundTransparency = 1
+		val.Size = UDim2.new(1, 0, 0, 20)
+		val.Position = UDim2.fromOffset(0, 20)
+		val.Font = Enum.Font.GothamBold
+		val.TextSize = 16
+		val.TextColor3 = COLORS.text
+		val.Text = "0"
+		val.Parent = card
+		return card, val
+	end
+
+	-- Main GUI
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "AutoFishGui"
+	gui.ResetOnSpawn = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Parent = PlayerGui
+
+	local shadow = Instance.new("Frame")
+	shadow.Name = "Shadow"
+	shadow.Size = UDim2.fromOffset(304, 412)
+	shadow.Position = UDim2.new(0, 18, 0, 122)
+	shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	shadow.BackgroundTransparency = 0.55
+	shadow.BorderSizePixel = 0
+	shadow.ZIndex = 1
+	shadow.Parent = gui
+	corner(shadow, 16)
+
+	local frame = Instance.new("Frame")
+	frame.Name = "Main"
+	frame.Size = UDim2.fromOffset(300, 408)
+	frame.Position = UDim2.new(0, 16, 0, 120)
+	frame.BackgroundColor3 = COLORS.bgTop
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.ZIndex = 2
+	frame.ClipsDescendants = true
+	frame.Parent = gui
+	corner(frame, 14)
+	gradient(frame, COLORS.bgTop, COLORS.bgBottom, 160)
+	stroke(frame, COLORS.accent, 1.5, 0.55)
+
+	local accentBar = Instance.new("Frame")
+	accentBar.Size = UDim2.new(1, 0, 0, 3)
+	accentBar.BackgroundColor3 = COLORS.accent
+	accentBar.BorderSizePixel = 0
+	accentBar.ZIndex = 3
+	accentBar.Parent = frame
+	gradient(accentBar, COLORS.accent, Color3.fromRGB(14, 165, 233), 0)
+
+	local header = Instance.new("Frame")
+	header.BackgroundTransparency = 1
+	header.Size = UDim2.new(1, 0, 0, 56)
+	header.ZIndex = 3
+	header.Parent = frame
+	pad(header, 14, 16, 0, 16)
+
+	local icon = Instance.new("TextLabel")
+	icon.BackgroundTransparency = 1
+	icon.Size = UDim2.fromOffset(36, 36)
+	icon.Position = UDim2.fromOffset(0, 2)
+	icon.Font = Enum.Font.GothamBold
+	icon.TextSize = 26
+	icon.Text = "🎣"
+	icon.ZIndex = 4
+	icon.Parent = header
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Size = UDim2.new(1, -44, 0, 22)
+	title.Position = UDim2.fromOffset(44, 2)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 18
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextColor3 = COLORS.text
+	title.Text = "Auto Fish"
+	title.ZIndex = 4
+	title.Parent = header
+
+	local subtitle = Instance.new("TextLabel")
+	subtitle.BackgroundTransparency = 1
+	subtitle.Size = UDim2.new(1, -44, 0, 16)
+	subtitle.Position = UDim2.fromOffset(44, 24)
+	subtitle.Font = Enum.Font.Gotham
+	subtitle.TextSize = 11
+	subtitle.TextXAlignment = Enum.TextXAlignment.Left
+	subtitle.TextColor3 = COLORS.muted
+	subtitle.Text = "Left Ctrl to toggle UI"
+	subtitle.ZIndex = 4
+	subtitle.Parent = header
+
+	local statusRow = Instance.new("Frame")
+	statusRow.BackgroundTransparency = 1
+	statusRow.Size = UDim2.new(1, -32, 0, 28)
+	statusRow.Position = UDim2.fromOffset(16, 58)
+	statusRow.ZIndex = 3
+	statusRow.Parent = frame
+
+	local statusPill = Instance.new("Frame")
+	statusPill.Name = "StatusPill"
+	statusPill.Size = UDim2.fromOffset(72, 24)
+	statusPill.BackgroundColor3 = Color3.fromRGB(20, 50, 40)
+	statusPill.BorderSizePixel = 0
+	statusPill.ZIndex = 4
+	statusPill.Parent = statusRow
+	corner(statusPill, 12)
+	stroke(statusPill, COLORS.success, 1, 0.4)
+
+	local statusDot = Instance.new("Frame")
+	statusDot.Name = "Dot"
+	statusDot.Size = UDim2.fromOffset(8, 8)
+	statusDot.Position = UDim2.fromOffset(10, 8)
+	statusDot.BackgroundColor3 = COLORS.success
+	statusDot.BorderSizePixel = 0
+	statusDot.ZIndex = 5
+	statusDot.Parent = statusPill
+	corner(statusDot, 4)
+
+	local statusLabel = Instance.new("TextLabel")
+	statusLabel.Name = "StatusLabel"
+	statusLabel.BackgroundTransparency = 1
+	statusLabel.Size = UDim2.new(1, -22, 1, 0)
+	statusLabel.Position = UDim2.fromOffset(22, 0)
+	statusLabel.Font = Enum.Font.GothamBold
+	statusLabel.TextSize = 11
+	statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+	statusLabel.TextColor3 = COLORS.success
+	statusLabel.Text = "ACTIVE"
+	statusLabel.ZIndex = 5
+	statusLabel.Parent = statusPill
+
+	local modeLabel = Instance.new("TextLabel")
+	modeLabel.Name = "ModeLabel"
+	modeLabel.BackgroundTransparency = 1
+	modeLabel.Size = UDim2.new(1, -80, 1, 0)
+	modeLabel.Position = UDim2.fromOffset(84, 0)
+	modeLabel.Font = Enum.Font.GothamMedium
+	modeLabel.TextSize = 12
+	modeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	modeLabel.TextColor3 = COLORS.muted
+	modeLabel.Text = "Fishing"
+	modeLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	modeLabel.ZIndex = 4
+	modeLabel.Parent = statusRow
+
+	local invLabel = Instance.new("TextLabel")
+	invLabel.BackgroundTransparency = 1
+	invLabel.Size = UDim2.new(1, -32, 0, 16)
+	invLabel.Position = UDim2.fromOffset(16, 92)
+	invLabel.Font = Enum.Font.GothamMedium
+	invLabel.TextSize = 11
+	invLabel.TextXAlignment = Enum.TextXAlignment.Left
+	invLabel.TextColor3 = COLORS.muted
+	invLabel.Text = "INVENTORY"
+	invLabel.ZIndex = 3
+	invLabel.Parent = frame
+
+	local fishCountLbl = Instance.new("TextLabel")
+	fishCountLbl.Name = "FishCount"
+	fishCountLbl.BackgroundTransparency = 1
+	fishCountLbl.Size = UDim2.fromOffset(60, 16)
+	fishCountLbl.Position = UDim2.new(1, -76, 0, 92)
+	fishCountLbl.Font = Enum.Font.GothamBold
+	fishCountLbl.TextSize = 11
+	fishCountLbl.TextXAlignment = Enum.TextXAlignment.Right
+	fishCountLbl.TextColor3 = COLORS.accent
+	fishCountLbl.Text = "0 / 5"
+	fishCountLbl.ZIndex = 3
+	fishCountLbl.Parent = frame
+
+	local progressOuter = Instance.new("Frame")
+	progressOuter.Size = UDim2.new(1, -32, 0, 10)
+	progressOuter.Position = UDim2.fromOffset(16, 112)
+	progressOuter.BackgroundColor3 = COLORS.progressBg
+	progressOuter.BorderSizePixel = 0
+	progressOuter.ZIndex = 3
+	progressOuter.Parent = frame
+	corner(progressOuter, 5)
+	stroke(progressOuter, Color3.fromRGB(40, 60, 80), 1, 0.5)
+
+	local progressFill = Instance.new("Frame")
+	progressFill.Name = "Fill"
+	progressFill.Size = UDim2.fromScale(0, 1)
+	progressFill.BackgroundColor3 = COLORS.progressFill
+	progressFill.BorderSizePixel = 0
+	progressFill.ZIndex = 4
+	progressFill.Parent = progressOuter
+	corner(progressFill, 5)
+	gradient(progressFill, COLORS.progressFill, Color3.fromRGB(56, 189, 248), 0)
+
+	local statsPanel = Instance.new("Frame")
+	statsPanel.BackgroundTransparency = 1
+	statsPanel.Size = UDim2.new(1, -32, 0, 96)
+	statsPanel.Position = UDim2.fromOffset(16, 134)
+	statsPanel.ZIndex = 3
+	statsPanel.Parent = frame
+
+	local _, valCasts = makeStatCard(statsPanel, "Casts", "CastsVal", UDim2.fromScale(0, 0))
+	local _, valCatches = makeStatCard(statsPanel, "Catches", "CatchesVal", UDim2.new(0.34, 0, 0, 0))
+	local _, valSells = makeStatCard(statsPanel, "Sells", "SellsVal", UDim2.new(0.68, 0, 0, 0))
+	local _, valFails = makeStatCard(statsPanel, "Fails", "FailsVal", UDim2.fromScale(0, 0, 52))
+	local _, valReels = makeStatCard(statsPanel, "Reels", "ReelsVal", UDim2.new(0.34, 0, 0, 52))
+	local _, valState = makeStatCard(statsPanel, "State", "StateVal", UDim2.new(0.68, 0, 0, 52))
+
+	local metaLabel = Instance.new("TextLabel")
+	metaLabel.Name = "MetaLabel"
+	metaLabel.BackgroundTransparency = 1
+	metaLabel.Size = UDim2.new(1, -32, 0, 28)
+	metaLabel.Position = UDim2.fromOffset(16, 238)
+	metaLabel.Font = Enum.Font.Gotham
+	metaLabel.TextSize = 10
+	metaLabel.TextXAlignment = Enum.TextXAlignment.Left
+	metaLabel.TextYAlignment = Enum.TextYAlignment.Top
+	metaLabel.TextColor3 = COLORS.muted
+	metaLabel.Text = "Dock: set  ·  Cast: auto"
+	metaLabel.ZIndex = 3
+	metaLabel.Parent = frame
+
+	local setupRow = Instance.new("Frame")
+	setupRow.BackgroundTransparency = 1
+	setupRow.Size = UDim2.new(1, -32, 0, 32)
+	setupRow.Position = UDim2.fromOffset(16, 270)
+	setupRow.ZIndex = 3
+	setupRow.Parent = frame
+
+	local setDock = Instance.new("TextButton")
+	setDock.Size = UDim2.new(0.5, -4, 1, 0)
+	setDock.BackgroundColor3 = COLORS.card
+	setDock.Font = Enum.Font.GothamBold
+	setDock.TextSize = 11
+	setDock.TextColor3 = COLORS.text
+	setDock.Text = "📍  Set Dock"
+	setDock.AutoButtonColor = false
+	setDock.BorderSizePixel = 0
+	setDock.ZIndex = 4
+	setDock.Parent = setupRow
+	corner(setDock, 8)
+	stroke(setDock, Color3.fromRGB(55, 75, 100), 1, 0.6)
+	hover(setDock, COLORS.card, COLORS.cardHover)
+
+	local setCast = Instance.new("TextButton")
+	setCast.Size = UDim2.new(0.5, -4, 1, 0)
+	setCast.Position = UDim2.new(0.5, 4, 0, 0)
+	setCast.BackgroundColor3 = COLORS.card
+	setCast.Font = Enum.Font.GothamBold
+	setCast.TextSize = 11
+	setCast.TextColor3 = COLORS.text
+	setCast.Text = "🎯  Set Cast"
+	setCast.AutoButtonColor = false
+	setCast.BorderSizePixel = 0
+	setCast.ZIndex = 4
+	setCast.Parent = setupRow
+	corner(setCast, 8)
+	stroke(setCast, Color3.fromRGB(55, 75, 100), 1, 0.6)
+	hover(setCast, COLORS.card, COLORS.cardHover)
+
+	local actionRow = Instance.new("Frame")
+	actionRow.BackgroundTransparency = 1
+	actionRow.Size = UDim2.new(1, -32, 0, 38)
+	actionRow.Position = UDim2.fromOffset(16, 312)
+	actionRow.ZIndex = 3
+	actionRow.Parent = frame
+
+	local toggleBtn = Instance.new("TextButton")
+	toggleBtn.Name = "Toggle"
+	toggleBtn.Size = UDim2.new(0.58, -4, 1, 0)
+	toggleBtn.BackgroundColor3 = Color3.fromRGB(185, 55, 55)
+	toggleBtn.Font = Enum.Font.GothamBold
+	toggleBtn.TextSize = 13
+	toggleBtn.TextColor3 = COLORS.text
+	toggleBtn.Text = "Turn OFF"
+	toggleBtn.AutoButtonColor = false
+	toggleBtn.BorderSizePixel = 0
+	toggleBtn.ZIndex = 4
+	toggleBtn.Parent = actionRow
+	corner(toggleBtn, 10)
+	gradient(toggleBtn, Color3.fromRGB(220, 70, 70), Color3.fromRGB(160, 45, 45), 90)
+	stroke(toggleBtn, Color3.fromRGB(255, 120, 120), 1, 0.5)
+
+	local resetBtn = Instance.new("TextButton")
+	resetBtn.Name = "Reset"
+	resetBtn.Size = UDim2.new(0.42, -4, 1, 0)
+	resetBtn.Position = UDim2.new(0.58, 4, 0, 0)
+	resetBtn.BackgroundColor3 = Color3.fromRGB(55, 75, 110)
+	resetBtn.Font = Enum.Font.GothamBold
+	resetBtn.TextSize = 13
+	resetBtn.TextColor3 = COLORS.text
+	resetBtn.Text = "↺  Reset"
+	resetBtn.AutoButtonColor = false
+	resetBtn.BorderSizePixel = 0
+	resetBtn.ZIndex = 4
+	resetBtn.Parent = actionRow
+	corner(resetBtn, 10)
+	gradient(resetBtn, Color3.fromRGB(65, 90, 130), Color3.fromRGB(45, 60, 90), 90)
+	stroke(resetBtn, Color3.fromRGB(100, 140, 200), 1, 0.55)
+	hover(resetBtn, Color3.fromRGB(55, 75, 110), Color3.fromRGB(70, 95, 135))
+
+	local testRow = Instance.new("Frame")
+	testRow.BackgroundTransparency = 1
+	testRow.Size = UDim2.new(1, -32, 0, 32)
+	testRow.Position = UDim2.fromOffset(16, 354)
+	testRow.ZIndex = 3
+	testRow.Parent = frame
+
+	local testReconnectBtn = Instance.new("TextButton")
+	testReconnectBtn.Name = "TestReconnect"
+	testReconnectBtn.Size = UDim2.new(1, 0, 1, 0)
+	testReconnectBtn.BackgroundColor3 = Color3.fromRGB(90, 60, 20)
+	testReconnectBtn.Font = Enum.Font.GothamBold
+	testReconnectBtn.TextSize = 11
+	testReconnectBtn.TextColor3 = COLORS.text
+	testReconnectBtn.Text = "⚡  Test Reconnect (rod gone)"
+	testReconnectBtn.AutoButtonColor = false
+	testReconnectBtn.BorderSizePixel = 0
+	testReconnectBtn.ZIndex = 4
+	testReconnectBtn.Parent = testRow
+	corner(testReconnectBtn, 8)
+	gradient(testReconnectBtn, Color3.fromRGB(120, 80, 30), Color3.fromRGB(70, 45, 15), 90)
+	stroke(testReconnectBtn, COLORS.warn, 1, 0.45)
+	hover(testReconnectBtn, Color3.fromRGB(90, 60, 20), Color3.fromRGB(110, 75, 28))
+
+	local setCastBanner = Instance.new("TextLabel")
+	setCastBanner.Name = "SetCastBanner"
+	setCastBanner.Size = UDim2.new(1, -24, 0, 36)
+	setCastBanner.Position = UDim2.new(0, 12, 0, 58)
+	setCastBanner.BackgroundColor3 = Color3.fromRGB(60, 45, 15)
+	setCastBanner.BackgroundTransparency = 0.15
+	setCastBanner.Font = Enum.Font.GothamBold
+	setCastBanner.TextSize = 12
+	setCastBanner.TextColor3 = COLORS.warn
+	setCastBanner.Text = "Click in the world to set cast location"
+	setCastBanner.Visible = false
+	setCastBanner.ZIndex = 10
+	setCastBanner.Parent = frame
+	corner(setCastBanner, 8)
+	stroke(setCastBanner, COLORS.warn, 1, 0.35)
+
+	local function pulseDot(on)
+		if _G.AutoFishPulseTween then _G.AutoFishPulseTween:Cancel() end
+		if on then
+			_G.AutoFishPulseTween = TweenService:Create(statusDot, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+				BackgroundTransparency = 0.45,
+			})
+			_G.AutoFishPulseTween:Play()
+			statusDot.BackgroundTransparency = 0
+		else
+			statusDot.BackgroundTransparency = 0.3
+		end
+	end
+
+	local function refreshGui()
+		if not gui.Parent or _G.AutoFishSetCastMode then return end
+		local s = _G.AutoFishStats
+		local on = _G.AutoFishEnabled
+		local fish = countFish()
+		local full = fish >= MAX_FISH
+
+		statusLabel.Text = on and "ACTIVE" or "PAUSED"
+		statusLabel.TextColor3 = on and COLORS.success or COLORS.danger
+		statusPill.BackgroundColor3 = on and Color3.fromRGB(20, 50, 40) or Color3.fromRGB(50, 25, 25)
+		statusDot.BackgroundColor3 = on and COLORS.success or COLORS.danger
+		pulseDot(on)
+
+		modeLabel.Text = _G.AutoFishMode or "Fishing"
+		modeLabel.TextColor3 = _G.AutoFishBusy and COLORS.warn or COLORS.muted
+
+		fishCountLbl.Text = fish .. " / " .. MAX_FISH
+		fishCountLbl.TextColor3 = full and COLORS.warn or COLORS.accent
+
+		TweenService:Create(progressFill, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {
+			Size = UDim2.fromScale(math.clamp(fish / MAX_FISH, 0, 1), 1),
+		}):Play()
+		progressFill.BackgroundColor3 = full and COLORS.warn or COLORS.progressFill
+
+		statsPanel:FindFirstChild("CastsVal", true).Text = tostring(s.casts)
+		statsPanel:FindFirstChild("CatchesVal", true).Text = tostring(s.catches)
+		statsPanel:FindFirstChild("SellsVal", true).Text = tostring(s.sells)
+		statsPanel:FindFirstChild("FailsVal", true).Text = tostring(s.fails)
+		statsPanel:FindFirstChild("ReelsVal", true).Text = tostring(s.reels)
+		statsPanel:FindFirstChild("StateVal", true).Text = s.lastState
+
+		local dockTxt = _G.AutoFishDockSpot and "set" or "auto"
+		local castTxt = _G.AutoFishCastSpot and "set" or "auto"
+		local flagTxt = _G.AutoFishFlagSpot and "set" or "default"
+		local respawnTxt = _G.AutoFishReturnOnDeath ~= false and "on" or "off"
+		metaLabel.Text = "Dock: " .. dockTxt .. "   ·   Cast: " .. castTxt .. "   ·   Flag: " .. flagTxt
+			.. "   ·   Respawn: " .. respawnTxt
+
+		toggleBtn.Text = on and "Turn OFF" or "Turn ON"
+	end
+
+	local function beginSetCast()
+		if _G.AutoFishSetCastConnection then _G.AutoFishSetCastConnection:Disconnect() end
+		_G.AutoFishSetCastMode = true
+		setCastBanner.Visible = true
+		modeLabel.Text = "Pick cast spot..."
+		task.delay(0.15, function()
+			_G.AutoFishSetCastConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+				if not _G.AutoFishSetCastMode then return end
+				if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+				if gameProcessed then return end
+				local cam = workspace.CurrentCamera
+				if not cam then return end
+				local ray = cam:ViewportPointToRay(input.Position.X, input.Position.Y)
+				local params = RaycastParams.new()
+				params.FilterType = Enum.RaycastFilterType.Exclude
+				local char = LocalPlayer.Character
+				params.FilterDescendantsInstances = char and { char } or {}
+				local hit = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+				local pos = hit and hit.Position or (ray.Origin + ray.Direction * 80)
+				_G.AutoFishCastSpot = { position = pos, setAt = os.clock() }
+				_G.AutoFishSetCastMode = false
+				setCastBanner.Visible = false
+				if _G.AutoFishSetCastConnection then
+					_G.AutoFishSetCastConnection:Disconnect()
+					_G.AutoFishSetCastConnection = nil
+				end
+				_G.AutoFishPersistState(false)
+				refreshGui()
+			end)
+		end)
+	end
+
+	toggleBtn.MouseButton1Click:Connect(function()
+		_G.AutoFishEnabled = not _G.AutoFishEnabled
+		_G.AutoFishPersistState(false)
+		refreshGui()
+	end)
+	resetBtn.MouseButton1Click:Connect(function()
+		_G.AutoFishReset()
+	end)
+	setDock.MouseButton1Click:Connect(function()
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			_G.AutoFishDockSpot = { position = hrp.Position, lookVector = hrp.CFrame.LookVector, cframe = hrp.CFrame }
+			_G.AutoFishPersistState(false)
+			refreshGui()
+		end
+	end)
+	setCast.MouseButton1Click:Connect(function()
+		beginSetCast()
+	end)
+	testReconnectBtn.MouseButton1Click:Connect(function()
+		_G.AutoFishPendingReturn = true
+		_G.AutoFishMode = "Test reconnect..."
+		_G.AutoFishRejoin(true)
+	end)
+
+	destroyReturnWaitGui = function()
+		if _G.AutoFishReturnWaitGuiConnection then
+			pcall(function() _G.AutoFishReturnWaitGuiConnection:Disconnect() end)
+			_G.AutoFishReturnWaitGuiConnection = nil
+		end
+		local existing = PlayerGui:FindFirstChild("AutoFishReturnWaitGui")
+		if existing then existing:Destroy() end
+	end
+
+	startReturnDeathWait = function()
+		if not _G.AutoFishEnabled or _G.AutoFishReturnOnDeath == false then return end
+		_G.AutoFishReturnWaitToken += 1
+		local token = _G.AutoFishReturnWaitToken
+		_G.AutoFishReturnToken += 1
+		_G.AutoFishReturnWait = true
+		_G.AutoFishReturning = false
+		_G.AutoFishBusy = true
+		stowTools()
+
+		local waitSec = math.random(RETURN_DEATH_WAIT_MIN, RETURN_DEATH_WAIT_MAX)
+		local endTime = tick() + waitSec
+		_G.AutoFishReturnWaitUntil = endTime
+		_G.AutoFishMode = "Waiting after death"
+
+		local function finishWait()
+			if token ~= _G.AutoFishReturnWaitToken then return end
+			_G.AutoFishReturnWait = false
+			destroyReturnWaitGui()
+			if _G.AutoFishReturnWaitHoldConnection then
+				pcall(function() _G.AutoFishReturnWaitHoldConnection:Disconnect() end)
+				_G.AutoFishReturnWaitHoldConnection = nil
+			end
+		end
+
+		local function beginReturnAfterWait()
+			if token ~= _G.AutoFishReturnWaitToken then return end
+			finishWait()
+			_G.AutoFishBusy = false
+			returnToDock()
+		end
+
+		destroyReturnWaitGui()
+		local waitGui = Instance.new("ScreenGui")
+		waitGui.Name = "AutoFishReturnWaitGui"
+		waitGui.ResetOnSpawn = false
+		waitGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		waitGui.Parent = PlayerGui
+
+		local waitShadow = Instance.new("Frame")
+		waitShadow.Size = UDim2.fromOffset(284, 156)
+		waitShadow.Position = UDim2.new(0.5, -140, 0, 96)
+		waitShadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		waitShadow.BackgroundTransparency = 0.55
+		waitShadow.BorderSizePixel = 0
+		waitShadow.ZIndex = 20
+		waitShadow.Parent = waitGui
+		corner(waitShadow, 14)
+
+		local waitCard = Instance.new("Frame")
+		waitCard.Size = UDim2.fromOffset(280, 152)
+		waitCard.Position = UDim2.new(0.5, -142, 0, 94)
+		waitCard.BackgroundColor3 = COLORS.bgTop
+		waitCard.BorderSizePixel = 0
+		waitCard.ZIndex = 21
+		waitCard.Parent = waitGui
+		corner(waitCard, 12)
+		gradient(waitCard, COLORS.bgTop, COLORS.bgBottom, 160)
+		stroke(waitCard, COLORS.warn, 1.5, 0.4)
+		pad(waitCard, 14, 14, 14, 14)
+
+		local waitTitle = Instance.new("TextLabel")
+		waitTitle.BackgroundTransparency = 1
+		waitTitle.Size = UDim2.new(1, 0, 0, 20)
+		waitTitle.Font = Enum.Font.GothamBold
+		waitTitle.TextSize = 14
+		waitTitle.TextColor3 = COLORS.warn
+		waitTitle.TextXAlignment = Enum.TextXAlignment.Left
+		waitTitle.Text = "Killed while returning"
+		waitTitle.ZIndex = 22
+		waitTitle.Parent = waitCard
+
+		local waitSub = Instance.new("TextLabel")
+		waitSub.BackgroundTransparency = 1
+		waitSub.Size = UDim2.new(1, 0, 0, 16)
+		waitSub.Position = UDim2.fromOffset(0, 22)
+		waitSub.Font = Enum.Font.Gotham
+		waitSub.TextSize = 11
+		waitSub.TextColor3 = COLORS.muted
+		waitSub.TextXAlignment = Enum.TextXAlignment.Left
+		waitSub.Text = "Standing by before walking back to dock"
+		waitSub.ZIndex = 22
+		waitSub.Parent = waitCard
+
+		local waitTimer = Instance.new("TextLabel")
+		waitTimer.Name = "Timer"
+		waitTimer.BackgroundTransparency = 1
+		waitTimer.Size = UDim2.new(1, 0, 0, 36)
+		waitTimer.Position = UDim2.fromOffset(0, 46)
+		waitTimer.Font = Enum.Font.GothamBold
+		waitTimer.TextSize = 28
+		waitTimer.TextColor3 = COLORS.text
+		waitTimer.Text = formatWaitTime(waitSec)
+		waitTimer.ZIndex = 22
+		waitTimer.Parent = waitCard
+
+		local skipBtn = Instance.new("TextButton")
+		skipBtn.Size = UDim2.new(1, 0, 0, 34)
+		skipBtn.Position = UDim2.fromOffset(0, 92)
+		skipBtn.BackgroundColor3 = COLORS.accentDim
+		skipBtn.Font = Enum.Font.GothamBold
+		skipBtn.TextSize = 12
+		skipBtn.TextColor3 = COLORS.text
+		skipBtn.Text = "Skip wait & return now"
+		skipBtn.AutoButtonColor = false
+		skipBtn.BorderSizePixel = 0
+		skipBtn.ZIndex = 22
+		skipBtn.Parent = waitCard
+		corner(skipBtn, 8)
+		gradient(skipBtn, COLORS.accent, COLORS.accentDim, 90)
+		stroke(skipBtn, COLORS.accent, 1, 0.35)
+		hover(skipBtn, COLORS.accentDim, COLORS.accent)
+
+		skipBtn.MouseButton1Click:Connect(beginReturnAfterWait)
+
+		if _G.AutoFishReturnWaitHoldConnection then
+			pcall(function() _G.AutoFishReturnWaitHoldConnection:Disconnect() end)
+		end
+		_G.AutoFishReturnWaitHoldConnection = RunService.Heartbeat:Connect(function()
+			if token ~= _G.AutoFishReturnWaitToken or not _G.AutoFishReturnWait then return end
+			holdStill()
+		end)
+
+		_G.AutoFishReturnWaitGuiConnection = RunService.Heartbeat:Connect(function()
+			if token ~= _G.AutoFishReturnWaitToken or not _G.AutoFishReturnWait then return end
+			waitTimer.Text = formatWaitTime(endTime - tick())
+		end)
+
+		task.spawn(function()
+			while tick() < endTime do
+				if token ~= _G.AutoFishReturnWaitToken or not _G.AutoFishReturnWait then return end
+				task.wait(0.25)
+			end
+			beginReturnAfterWait()
+		end)
+	end
+
+	local dragging, dragStart, startPos, startShadow
+	frame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+			startShadow = shadow.Position
+		end
+	end)
+	frame.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			shadow.Position = UDim2.new(startShadow.X.Scale, startShadow.X.Offset + d.X, startShadow.Y.Scale, startShadow.Y.Offset + d.Y)
+		end
+	end)
+
+	_G.AutoFishUIVisible = true
+	_G.AutoFishToggleUIConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if input.KeyCode ~= Enum.KeyCode.LeftControl then return end
+		_G.AutoFishUIVisible = not _G.AutoFishUIVisible
+		gui.Enabled = _G.AutoFishUIVisible
+	end)
+
+	refreshGui()
+	setupServerAntiAfk()
+	setupCharacterHooks()
+
+	local hadLegendaryRod = getRod() ~= nil
+	local rodMissingSince = nil
+	_G.AutoFishRodConnection = RunService.Heartbeat:Connect(function()
+		if _G.AutoFishRejoining or not _G.AutoFishEnabled or _G.AutoFishCeremony then return end
+		local rod = getRod()
+		if rod then
+			hadLegendaryRod = true
+			rodMissingSince = nil
+			return
+		end
+		if not hadLegendaryRod then return end
+		if _G.AutoFishBusy or _G.AutoFishReturning or _G.AutoFishReturnWait then return end
+		if not rodMissingSince then
+			rodMissingSince = tick()
+		elseif tick() - rodMissingSince >= ROD_MISSING_REJOIN_SEC then
+			rodMissingSince = nil
+			_G.AutoFishPendingReturn = true
+			_G.AutoFishMode = "Legendary rod missing — rejoining"
+			_G.AutoFishRejoin(true)
+		end
+	end)
+
+	if _G.AutoFishPendingReturn then
+		_G.AutoFishPendingReturn = false
+		_G.AutoFishPersistState(false)
+		task.defer(function()
+			local char = LocalPlayer.Character
+			if not char then
+				char = LocalPlayer.CharacterAdded:Wait()
+			end
+			char:WaitForChild("HumanoidRootPart", 20)
+			task.wait(0.5)
+			returnToDock()
+		end)
+	end
+
+	pcall(function()
+		_G.AutoFishPersistState(false)
+	end)
+
+	_G.AutoFishHeartbeat = RunService.Heartbeat:Connect(function()
+		if not _G.AutoFishEnabled or _G.AutoFishBusy or _G.AutoFishReturning or _G.AutoFishReturnWait or _G.AutoFishSetCastMode or _G.AutoFishCeremony then return end
+		if countFish() >= MAX_FISH then
+			task.spawn(runSellTrip)
+			return
+		end
+		local tool = getRod()
+		if not tool then return end
+		if tool.Parent == LocalPlayer.Backpack then
+			equipRod(tool)
+			return
+		end
+		trackState(tool)
+		local state = getState(tool)
+		local now = tick()
+		if state == "Idle" then
+			if now - _G.AutoFishTimers.lastCast >= CAST_COOLDOWN and castRod(tool) then
+				_G.AutoFishStats.casts += 1
+				_G.AutoFishTimers.lastCast = now
+			end
+		elseif state == "QTE" then
+			if now - _G.AutoFishTimers.lastReel >= getReelCooldown(tool) and shouldReel(tool) then
+				tool:Activate()
+				_G.AutoFishStats.reels += 1
+				_G.AutoFishTimers.lastReel = now
+			end
+		end
+	end)
+
+	_G.AutoFishGuiHeartbeat = RunService.Heartbeat:Connect(function()
+		refreshGui()
+	end)
+
+	task.defer(function()
+		if not _G.AutoFishFlagSpot then
+			_G.AutoFishFlagSpot = { position = getFlagPos(), setAt = os.clock() }
+		end
+	end)
+
+	local ceremonyLastTrigger = 0
+	local function tryStartCeremony()
+		if _G.AutoFishCeremony then return end
+		if _G.AutoFishBusy and not _G.AutoFishReturning and not _G.AutoFishReturnWait then return end
+		local now = tick()
+		if now - ceremonyLastTrigger < 8 then return end
+		ceremonyLastTrigger = now
+		task.spawn(runCeremony)
+	end
+	_G.AutoFishTryStartCeremony = tryStartCeremony
+
+	local anthem = getAnthemSound()
+	if anthem then
+		_G.AutoFishCeremonyConnection = anthem:GetPropertyChangedSignal("IsPlaying"):Connect(function()
+			if anthem.IsPlaying then tryStartCeremony() end
+		end)
+		_G.AutoFishCeremonyPlayedConnection = anthem.Played:Connect(tryStartCeremony)
+	end
+
+	print("[AutoFish v8.4] IY-style rejoin — set getgenv().AutoFishScriptUrl to raw GitHub URL")
+end
+
+_G.AutoFishReset = function()
+	_G.AutoFishLoad()
+end
+
+_G.AutoFishLoad()
